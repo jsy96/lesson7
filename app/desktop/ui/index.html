@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Codex Keyboard</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script type="module" src="./main.js"></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="titlebar">
+        <div>
+          <p class="eyebrow">LOCAL WI-FI</p>
+          <h1>Codex Keyboard</h1>
+        </div>
+        <button
+          id="refresh"
+          class="icon-button"
+          type="button"
+          aria-label="刷新 Host 状态"
+          title="刷新"
+        >
+          <svg
+            aria-hidden="true"
+            data-icon-source="lucide:refresh-cw"
+            viewBox="0 0 24 24"
+            width="18"
+            height="18"
+          >
+            <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+            <path d="M21 3v5h-5" />
+            <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+            <path d="M8 16H3v5" />
+          </svg>
+        </button>
+      </header>
+
+      <section id="status-band" class="status-band checking" aria-live="polite">
+        <span id="status-dot" class="status-dot checking"></span>
+        <div>
+          <p id="status-title" class="status-title">正在连接 Host</p>
+          <p id="status-detail" class="status-detail">等待本地 health socket</p>
+        </div>
+      </section>
+
+      <section class="binding-section" aria-labelledby="binding-title">
+        <div class="section-heading">
+          <h2 id="binding-title">四槽绑定</h2>
+          <span id="task-count" class="task-count">-- 个任务</span>
+        </div>
+        <div id="slots" class="slots" aria-live="polite"></div>
+      </section>
+
+      <section class="provider-band" aria-labelledby="provider-title">
+        <div class="provider-heading">
+          <span id="provider-dot" class="provider-dot"></span>
+          <h2 id="provider-title">DashScope</h2>
+          <span id="provider-state">检测中</span>
+        </div>
+        <dl class="provider-facts">
+          <div>
+            <dt>ASR</dt>
+            <dd id="asr-model">--</dd>
+          </div>
+          <div>
+            <dt>TTS</dt>
+            <dd id="tts-model">--</dd>
+          </div>
+          <div>
+            <dt>音色</dt>
+            <dd id="tts-voice">--</dd>
+          </div>
+        </dl>
+      </section>
+
+      <dl class="facts">
+        <div class="fact-row">
+          <dt>Host</dt>
+          <dd>
+            <span id="host-version">--</span> · PID
+            <span id="host-pid">--</span>
+          </dd>
+        </div>
+        <div class="fact-row">
+          <dt>本地状态</dt>
+          <dd>
+            <span id="host-socket">run/host.sock</span> · DB
+            <span id="database-schema">--</span>
+          </dd>
+        </div>
+      </dl>
+
+      <footer>
+        <span id="last-updated">尚未收到状态</span>
+        <span>关闭窗口不会停止 Host</span>
+      </footer>
+    </main>
+
+    <template id="slot-template">
+      <div class="slot-row">
+        <div class="key-pair" aria-hidden="true">
+          <kbd class="talk-key"></kbd>
+          <kbd class="play-key"></kbd>
+        </div>
+        <div class="slot-content">
+          <label class="slot-label"></label>
+          <select class="task-select" aria-label=""></select>
+          <p class="slot-meta"></p>
+        </div>
+        <button
+          class="bind-button icon-button"
+          type="button"
+          aria-label=""
+          title="绑定"
+        >
+          <svg
+            aria-hidden="true"
+            data-icon-source="lucide:link"
+            viewBox="0 0 24 24"
+            width="17"
+            height="17"
+          >
+            <path
+              d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"
+            />
+            <path
+              d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"
+            />
+          </svg>
+        </button>
+      </div>
+    </template>
+  </body>
+</html>

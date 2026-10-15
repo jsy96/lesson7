@@ -436,10 +436,15 @@ fn is_user_owned_thread(source: &str, thread_source: &str, agent_role: &str) -> 
 
 fn pinned_ids(global: &serde_json::Value) -> Result<Vec<String>, CatalogError> {
     let object = global.as_object().ok_or(CatalogError::InvalidIndex)?;
-    let values = object
+    // Newer Codex releases omit the legacy key entirely when no thread is pinned.
+    // Treat that case as an empty pinned set instead of rejecting the whole index;
+    // bounded recent threads still provide the task allow-list below.
+    let Some(values) = object
         .get("pinned-thread-ids")
         .and_then(serde_json::Value::as_array)
-        .ok_or(CatalogError::InvalidIndex)?;
+    else {
+        return Ok(Vec::new());
+    };
     if values.len() > MAX_PINNED_CANDIDATES {
         return Err(CatalogError::IndexTooLarge);
     }
@@ -1139,6 +1144,31 @@ mod tests {
         );
         assert!(catalog.allowlisted(ARCHIVED).is_err());
         assert!(catalog.allowlisted(INTERNAL).is_err());
+    }
+
+    #[test]
+    fn omitted_legacy_pinned_index_still_lists_bounded_recent_tasks() {
+        let temp = tempdir().unwrap();
+        write_fixture(temp.path());
+        fs::write(
+            temp.path().join(".codex-global-state.json"),
+            serde_json::to_vec(&json!({
+                "electron-persisted-atom-state": {}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let tasks = test_catalog(temp.path()).list_tasks().unwrap();
+
+        assert_eq!(
+            tasks
+                .iter()
+                .map(|task| task.task_id.as_str())
+                .collect::<Vec<_>>(),
+            [RECENT_A, RECENT_B, PINNED_B, PINNED_A]
+        );
+        assert!(tasks.iter().all(|task| !task.pinned));
     }
 
     #[test]

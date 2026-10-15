@@ -92,6 +92,14 @@
 - [x] 补固定库加载、manifest provenance、voice 校验和 summary worker 无 key 路径测试；全量
       `eval-fast` 通过后更新总体方案与进展日志。
 
+## L4 新手完整跑通引导
+
+- [x] 修复新版 Codex catalog 对省略 `pinned-thread-ids` 的兼容：字段缺失表示没有置顶任务，最近任务 allow-list 继续可用，并补回归测试。
+- [ ] 安装并启动本地 Mac Host，验证 health、无 Key 本地 ASR 和固定 TTS 状态。
+- [ ] 构建、安装并打开 `Codex Keyboard.app`，确认任务列表和四槽绑定可用。
+- [ ] 连接 EasyInput V2，先做设备识别与日志核验；如需烧录，必须重新构建并按三镜像 SHA 授权 SOP 执行。
+- [ ] 完成同 Wi-Fi 下 S1 语音输入 -> Codex 执行 -> S5 播放完成提示的端到端 HIL，再逐步覆盖四槽。
+
 ## 阶段合同
 
 每阶段必须依次完成：实现 -> 自动化 -> live/HIL（如适用）-> 提交 -> 推送。当前按用户要求不启动子智能体或额外独立审查。

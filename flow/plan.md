@@ -80,6 +80,18 @@
   逐项原样保留或新旧文本增量；只保留结构、任务归属、尺寸、脱敏和有效 TTS 等运行安全底线，并让
   当前仍 pending 的第 3 槽完成结果自动重新总结并发布为 generation 22；等待真机确认 S7 灯已同步点亮。
 
+### L2E 无 Key 固定语音信箱降级
+
+- [x] 在不改固件、不改 EIAD/cache/generation/heard 协议的前提下，为 Host 增加固定语音 TTS 降级：
+      DashScope key 缺失且本地固定 WAV 存在时发布固定提示音；key 存在时仍固定走北京区
+      `qwen-audio-3.0-tts-flash` / `longanfengyue`。
+- [x] 新增 Host CLI 用 macOS `say` 本地生成 48 kHz mono PCM16 固定提示音，原子写入 App Support
+      私有目录并校验 owner/权限/格式；缓存 manifest 如实记录 `fixed-local-v1` / `macos-say` 来源。
+- [x] Luna 文字总结、未听滚存、generation 发布、播放完成 heard 与缓存删除语义保持不变；固定语音
+      只是可听内容降级，文字总结仍可在桌面 App 查看。
+- [x] 补固定库加载、manifest provenance、voice 校验和 summary worker 无 key 路径测试；全量
+      `eval-fast` 通过后更新总体方案与进展日志。
+
 ## 阶段合同
 
 每阶段必须依次完成：实现 -> 自动化 -> live/HIL（如适用）-> 提交 -> 推送。当前按用户要求不启动子智能体或额外独立审查。

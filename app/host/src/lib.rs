@@ -4,6 +4,7 @@ pub mod cache;
 pub mod codex_catalog;
 pub mod codex_runner;
 pub mod dashscope;
+pub mod fixed_tts;
 pub mod health;
 pub mod lan_playback;
 pub mod lan_voice;

@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use crate::cache::CacheLimits;
 use crate::cache::CacheStore;
 use crate::dashscope::DashScopeTtsClient;
+use crate::fixed_tts::{FixedAudioSummarySynthesizer, FixedTtsLibrary};
 use crate::paths::AppPaths;
 #[cfg(not(test))]
 use crate::secrets::LocalCacheSecretStore;
@@ -17,7 +18,7 @@ use crate::secrets::{DashScopeEnvStore, ImportLock, KeychainAccounts, dashscope_
 use crate::spark_runner::{SparkRunner, SparkRunnerConfig};
 use crate::store::StateStore;
 use crate::summary_orchestrator::{
-    DashScopeSummarySynthesizer, SummaryOrchestrator, SummaryRunOutcome,
+    DashScopeSummarySynthesizer, SummaryOrchestrator, SummaryRunOutcome, SummarySynthesizer,
 };
 
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -45,12 +46,20 @@ pub fn run(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SummaryTtsMode {
+    DashScope,
+    FixedAudio,
+}
+
 struct Runtime {
     cache: Arc<CacheStore>,
     spark: SparkRunner,
     tts_client: DashScopeTtsClient,
     dashscope_env: DashScopeEnvStore,
     accounts: KeychainAccounts,
+    tts_mode: SummaryTtsMode,
+    fixed_tts: Option<FixedTtsLibrary>,
 }
 
 impl Runtime {
@@ -60,17 +69,33 @@ impl Runtime {
         let accounts = KeychainAccounts::load_or_create(&paths.installation_id, &lock)
             .map_err(|error| error.to_string())?;
         let dashscope_env = DashScopeEnvStore::new(paths.dashscope_env.clone(), &accounts);
-        if !dashscope_key_is_installed(&dashscope_env, &accounts)
-            .map_err(|error| error.to_string())?
-        {
-            return Err("dashscope credential is missing".into());
-        }
+        let credential_installed = dashscope_key_is_installed(&dashscope_env, &accounts)
+            .map_err(|error| error.to_string())?;
+        let (tts_mode, fixed_tts) = if credential_installed {
+            (SummaryTtsMode::DashScope, None)
+        } else {
+            let library = FixedTtsLibrary::open(paths).map_err(|error| {
+                format!("dashscope credential is missing and fixed TTS is unavailable: {error}")
+            })?;
+            (SummaryTtsMode::FixedAudio, Some(library))
+        };
+        eprintln!(
+            "summary_tts_mode={:?} reason={}",
+            tts_mode,
+            if credential_installed {
+                "configured"
+            } else {
+                "credential_missing"
+            }
+        );
         Ok(Self {
             cache,
             spark: SparkRunner::new(SparkRunnerConfig::default()),
             tts_client: DashScopeTtsClient::default(),
             dashscope_env,
             accounts,
+            tts_mode,
+            fixed_tts,
         })
     }
 }
@@ -123,10 +148,18 @@ fn run_ready(
             {
                 continue;
             }
-            let tts = DashScopeSummarySynthesizer {
-                client: &runtime.tts_client,
-                secrets: &runtime.dashscope_env,
-                accounts: &runtime.accounts,
+            let tts: Box<dyn SummarySynthesizer> = match runtime.tts_mode {
+                SummaryTtsMode::DashScope => Box::new(DashScopeSummarySynthesizer {
+                    client: &runtime.tts_client,
+                    secrets: &runtime.dashscope_env,
+                    accounts: &runtime.accounts,
+                }),
+                SummaryTtsMode::FixedAudio => Box::new(FixedAudioSummarySynthesizer::new(
+                    runtime
+                        .fixed_tts
+                        .as_ref()
+                        .expect("fixed TTS library is loaded in fixed mode"),
+                )),
             };
             let request_id = format!("auto-{}", uuid::Uuid::new_v4());
             let result = {

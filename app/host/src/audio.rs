@@ -92,7 +92,7 @@ fn validate_pcm(pcm_le: &[u8]) -> Result<u64, AudioError> {
     }
 }
 
-fn encode_wav(pcm_le: &[u8]) -> Result<Vec<u8>, AudioError> {
+pub(crate) fn encode_wav(pcm_le: &[u8]) -> Result<Vec<u8>, AudioError> {
     validate_pcm(pcm_le)?;
     let data_bytes = u32::try_from(pcm_le.len()).map_err(|_| AudioError::Size)?;
     let riff_bytes = data_bytes.checked_add(36).ok_or(AudioError::Size)?;

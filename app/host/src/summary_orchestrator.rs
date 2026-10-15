@@ -2,6 +2,7 @@ use thiserror::Error;
 
 use crate::cache::{CacheError, CacheStore};
 use crate::dashscope::{DashScopeTtsClient, TtsAudio, TtsError, TtsRequest};
+use crate::fixed_tts::FIXED_TTS_VOICE;
 use crate::secrets::{KeychainAccounts, SecretStore};
 use crate::spark_runner::{SparkError, SparkRunner};
 use crate::store::{
@@ -37,6 +38,17 @@ impl SummaryGenerator for SparkRunner {
 pub trait SummarySynthesizer {
     fn synthesize(&self, text: &str, voice: &str, instructions: &str)
     -> Result<TtsAudio, TtsError>;
+}
+
+impl<T: SummarySynthesizer + ?Sized> SummarySynthesizer for Box<T> {
+    fn synthesize(
+        &self,
+        text: &str,
+        voice: &str,
+        instructions: &str,
+    ) -> Result<TtsAudio, TtsError> {
+        (**self).synthesize(text, voice, instructions)
+    }
 }
 
 pub struct DashScopeSummarySynthesizer<'a, S> {
@@ -264,7 +276,7 @@ where
                 return Err(error.into());
             }
         };
-        if tts.receipt().voice != SUMMARY_TTS_VOICE {
+        if tts.receipt().voice != SUMMARY_TTS_VOICE && tts.receipt().voice != FIXED_TTS_VOICE {
             self.abandon(&claim)?;
             eprintln!(
                 "summary=abandoned_unpublished_tts_attempt state=voice_mismatch generation={}",
@@ -464,6 +476,7 @@ mod tests {
         SafeFailure,
         Ambiguous,
         WrongVoice,
+        FixedVoice,
     }
 
     struct FakeSynthesizer {
@@ -484,7 +497,7 @@ mod tests {
             match self.mode {
                 FakeTtsMode::SafeFailure => Err(TtsError::Unavailable),
                 FakeTtsMode::Ambiguous => Err(TtsError::AmbiguousAfterCommit),
-                FakeTtsMode::Success | FakeTtsMode::WrongVoice => {
+                FakeTtsMode::Success | FakeTtsMode::WrongVoice | FakeTtsMode::FixedVoice => {
                     let samples = text.len().max(1) * 32;
                     let pcm = (0..samples)
                         .flat_map(|sample| ((sample % 511) as i16).to_le_bytes())
@@ -493,10 +506,10 @@ mod tests {
                         pcm,
                         TtsReceipt {
                             model: TTS_MODEL,
-                            voice: if matches!(self.mode, FakeTtsMode::WrongVoice) {
-                                "WrongVoice".into()
-                            } else {
-                                voice.into()
+                            voice: match self.mode {
+                                FakeTtsMode::WrongVoice => "WrongVoice".into(),
+                                FakeTtsMode::FixedVoice => crate::fixed_tts::FIXED_TTS_VOICE.into(),
+                                _ => voice.into(),
                             },
                             sample_rate: TTS_SAMPLE_RATE,
                             samples: samples as u64,
@@ -784,6 +797,25 @@ mod tests {
                 ..
             }))
         ));
+    }
+
+    #[test]
+    fn fixed_local_voice_publishes_without_releasing_the_claim() {
+        let temporary = tempfile::tempdir().unwrap();
+        let state_path = temporary.path().join("state.sqlite3");
+        let cache_path = temporary.path().join("cache");
+        let mut store = StateStore::open(&state_path).unwrap();
+        let cache = open_cache(&cache_path);
+        insert_completion(&mut store, FIRST, 1);
+        let generator = generator();
+        let fixed_voice = synthesizer(FakeTtsMode::FixedVoice);
+        let outcome = SummaryOrchestrator::new(&mut store, &cache, &generator, &fixed_voice)
+            .run(TASK, "request-1")
+            .unwrap();
+        assert!(matches!(outcome, SummaryRunOutcome::Published { .. }));
+        assert_eq!(fixed_voice.calls.load(Ordering::SeqCst), 1);
+        let unread = store.current_unread_summary(TASK).unwrap().unwrap();
+        assert_eq!(unread.generation, 1);
     }
 
     #[test]

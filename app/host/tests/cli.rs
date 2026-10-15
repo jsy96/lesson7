@@ -182,3 +182,22 @@ fn dashscope_import_requires_an_explicit_readable_source() {
     let stderr = String::from_utf8(output.stderr).expect("stderr is UTF-8");
     assert!(stderr.contains("UnsafeSource"));
 }
+
+#[test]
+fn tts_status_reports_fixed_local_mode_without_credentials() {
+    let home = short_home();
+    let output = host_command()
+        .arg("tts-status")
+        .env("HOME", home.path())
+        .output()
+        .expect("run tts-status");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("status=missing\n"));
+    assert!(stdout.contains("provider=fixed-local\n"));
+    assert!(stdout.contains("model=fixed-local-v1\n"));
+    assert!(stdout.contains("voice=macos-say\n"));
+    assert!(stdout.contains("region=local\n"));
+    assert!(stdout.contains("fixed_audio_present=false\n"));
+}

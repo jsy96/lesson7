@@ -202,6 +202,10 @@ impl TtsAudio {
         &self.receipt
     }
 
+    pub(crate) fn new(pcm: Zeroizing<Vec<u8>>, receipt: TtsReceipt) -> Self {
+        Self { pcm, receipt }
+    }
+
     #[cfg(test)]
     pub(crate) fn from_test(pcm: Vec<u8>, receipt: TtsReceipt) -> Self {
         Self {

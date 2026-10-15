@@ -8,7 +8,12 @@ use easy_codex_host::cache::{CacheLimits, CacheStore};
 use easy_codex_host::codex_catalog::CodexTaskCatalog;
 #[cfg(target_os = "macos")]
 use easy_codex_host::dashscope::DashScopeTtsClient;
-use easy_codex_host::dashscope::{ASR_MODEL, DashScopeAsrClient, DashScopeHandshake};
+use easy_codex_host::dashscope::{ASR_MODEL, DashScopeAsrClient, DashScopeHandshake, TTS_MODEL};
+#[cfg(target_os = "macos")]
+use easy_codex_host::fixed_tts::{
+    FIXED_TTS_MODEL, FIXED_TTS_VOICE, FixedAudioSummarySynthesizer, FixedTtsLibrary,
+    fixed_tts_is_configured,
+};
 use easy_codex_host::health::{HEALTH_SOCKET_NAME, HostDaemon, query_health};
 use easy_codex_host::lan_voice::{WhisperCppConfig, import_default_whisper_model};
 use easy_codex_host::launch_agent::{
@@ -27,9 +32,9 @@ use easy_codex_host::secrets::{
 #[cfg(target_os = "macos")]
 use easy_codex_host::spark_runner::{SparkRunner, SparkRunnerConfig};
 use easy_codex_host::store::StateStore;
-#[cfg(target_os = "macos")]
 use easy_codex_host::summary_orchestrator::{
-    DashScopeSummarySynthesizer, SummaryOrchestrator, SummaryRunOutcome,
+    DashScopeSummarySynthesizer, SUMMARY_TTS_VOICE, SummaryOrchestrator, SummaryRunOutcome,
+    SummarySynthesizer,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -42,6 +47,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "dashscope-key-status" => {
                 require_no_more_arguments(&mut arguments, "dashscope-key-status")?;
                 return dashscope_status();
+            }
+            "tts-generate-fixed" => {
+                let voice = arguments.next();
+                require_no_more_arguments(&mut arguments, "tts-generate-fixed")?;
+                return generate_fixed_tts_cli(voice.as_deref());
+            }
+            "tts-status" => {
+                require_no_more_arguments(&mut arguments, "tts-status")?;
+                return print_tts_status();
             }
             "daemon" => {
                 require_no_more_arguments(&mut arguments, "daemon")?;
@@ -270,6 +284,71 @@ fn import_asr_model(source: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn generate_fixed_tts_cli(voice: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    let paths = home_paths()?;
+    paths.prepare()?;
+    let receipt = easy_codex_host::fixed_tts::generate_fixed_tts(&paths, voice)?;
+    println!("status=generated");
+    println!("model={FIXED_TTS_MODEL}");
+    println!("voice={FIXED_TTS_VOICE}");
+    println!("bytes={}", receipt.bytes);
+    println!("duration_ms={}", receipt.duration_ms);
+    println!("sha256={}", receipt.sha256);
+    println!("destination=private_app_support");
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn generate_fixed_tts_cli(_voice: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    Err("tts-generate-fixed requires the macOS Host runtime".into())
+}
+
+fn print_tts_status() -> Result<(), Box<dyn std::error::Error>> {
+    let paths = home_paths()?;
+    paths.prepare()?;
+    let import_lock = ImportLock::acquire(&paths.runtime_directory.join("key-import.lock"))?;
+    let accounts = KeychainAccounts::load_or_create(&paths.installation_id, &import_lock)?;
+    let env = DashScopeEnvStore::new(paths.dashscope_env.clone(), &accounts);
+    let configured = dashscope_key_is_installed(&env, &accounts)?;
+    let fixed_present = fixed_tts_is_configured(&paths);
+    println!(
+        "status={}",
+        if configured || fixed_present {
+            "ready"
+        } else {
+            "missing"
+        }
+    );
+    println!(
+        "provider={}",
+        if configured {
+            "dashscope"
+        } else {
+            "fixed-local"
+        }
+    );
+    println!(
+        "model={}",
+        if configured {
+            TTS_MODEL
+        } else {
+            FIXED_TTS_MODEL
+        }
+    );
+    println!(
+        "voice={}",
+        if configured {
+            SUMMARY_TTS_VOICE
+        } else {
+            FIXED_TTS_VOICE
+        }
+    );
+    println!("region={}", if configured { "cn-beijing" } else { "local" });
+    println!("fixed_audio_present={fixed_present}");
+    Ok(())
+}
+
 fn print_asr_status() -> Result<(), Box<dyn std::error::Error>> {
     let paths = home_paths()?;
     paths.prepare()?;
@@ -328,15 +407,31 @@ fn summarize_slot(slot: u8) -> Result<(), Box<dyn std::error::Error>> {
         CacheLimits::default(),
     )?;
     let dashscope_env = DashScopeEnvStore::new(paths.dashscope_env.clone(), &accounts);
-    if !dashscope_key_is_installed(&dashscope_env, &accounts)? {
-        return Err("DashScope API key is not configured".into());
-    }
+    let dashscope_ready = dashscope_key_is_installed(&dashscope_env, &accounts)?;
+    let fixed_library = if dashscope_ready {
+        None
+    } else {
+        Some(FixedTtsLibrary::open(&paths).map_err(|error| {
+            format!("DashScope API key is not configured and fixed TTS is unavailable: {error}")
+        })?)
+    };
+    println!(
+        "tts_mode={}",
+        if dashscope_ready {
+            "dashscope"
+        } else {
+            "fixed_audio"
+        }
+    );
     let spark = SparkRunner::new(SparkRunnerConfig::default());
     let tts_client = DashScopeTtsClient::default();
-    let tts = DashScopeSummarySynthesizer {
-        client: &tts_client,
-        secrets: &dashscope_env,
-        accounts: &accounts,
+    let tts: Box<dyn SummarySynthesizer> = match &fixed_library {
+        None => Box::new(DashScopeSummarySynthesizer {
+            client: &tts_client,
+            secrets: &dashscope_env,
+            accounts: &accounts,
+        }),
+        Some(library) => Box::new(FixedAudioSummarySynthesizer::new(library)),
     };
     let request_id = format!("manual-{}", uuid::Uuid::new_v4());
     let outcome = {

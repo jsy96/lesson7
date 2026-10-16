@@ -184,7 +184,7 @@ fn dashscope_import_requires_an_explicit_readable_source() {
 }
 
 #[test]
-fn tts_status_reports_fixed_local_mode_without_credentials() {
+fn tts_status_reports_local_dynamic_mode_without_credentials() {
     let home = short_home();
     let output = host_command()
         .arg("tts-status")
@@ -195,9 +195,10 @@ fn tts_status_reports_fixed_local_mode_without_credentials() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("status=missing\n"));
-    assert!(stdout.contains("provider=fixed-local\n"));
-    assert!(stdout.contains("model=fixed-local-v1\n"));
-    assert!(stdout.contains("voice=macos-say\n"));
+    assert!(stdout.contains("provider=local-say\n"));
+    assert!(stdout.contains("model=local-say-dynamic-v1\n"));
+    assert!(stdout.contains("voice=macos-say-tingting\n"));
     assert!(stdout.contains("region=local\n"));
     assert!(stdout.contains("fixed_audio_present=false\n"));
+    assert!(stdout.contains("local_say_present=true\n"));
 }

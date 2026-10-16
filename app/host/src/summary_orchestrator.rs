@@ -2,7 +2,7 @@ use thiserror::Error;
 
 use crate::cache::{CacheError, CacheStore};
 use crate::dashscope::{DashScopeTtsClient, TtsAudio, TtsError, TtsRequest};
-use crate::fixed_tts::FIXED_TTS_VOICE;
+use crate::fixed_tts::{FIXED_TTS_VOICE, LOCAL_SAY_TTS_VOICE};
 use crate::secrets::{KeychainAccounts, SecretStore};
 use crate::spark_runner::{SparkError, SparkRunner};
 use crate::store::{
@@ -276,7 +276,10 @@ where
                 return Err(error.into());
             }
         };
-        if tts.receipt().voice != SUMMARY_TTS_VOICE && tts.receipt().voice != FIXED_TTS_VOICE {
+        if !matches!(
+            tts.receipt().voice.as_str(),
+            SUMMARY_TTS_VOICE | FIXED_TTS_VOICE | LOCAL_SAY_TTS_VOICE
+        ) {
             self.abandon(&claim)?;
             eprintln!(
                 "summary=abandoned_unpublished_tts_attempt state=voice_mismatch generation={}",
@@ -477,6 +480,7 @@ mod tests {
         Ambiguous,
         WrongVoice,
         FixedVoice,
+        LocalSayVoice,
     }
 
     struct FakeSynthesizer {
@@ -497,7 +501,10 @@ mod tests {
             match self.mode {
                 FakeTtsMode::SafeFailure => Err(TtsError::Unavailable),
                 FakeTtsMode::Ambiguous => Err(TtsError::AmbiguousAfterCommit),
-                FakeTtsMode::Success | FakeTtsMode::WrongVoice | FakeTtsMode::FixedVoice => {
+                FakeTtsMode::Success
+                | FakeTtsMode::WrongVoice
+                | FakeTtsMode::FixedVoice
+                | FakeTtsMode::LocalSayVoice => {
                     let samples = text.len().max(1) * 32;
                     let pcm = (0..samples)
                         .flat_map(|sample| ((sample % 511) as i16).to_le_bytes())
@@ -505,16 +512,25 @@ mod tests {
                     Ok(TtsAudio::from_test(
                         pcm,
                         TtsReceipt {
-                            model: TTS_MODEL,
+                            model: match self.mode {
+                                FakeTtsMode::LocalSayVoice => crate::fixed_tts::LOCAL_SAY_TTS_MODEL,
+                                _ => TTS_MODEL,
+                            },
                             voice: match self.mode {
                                 FakeTtsMode::WrongVoice => "WrongVoice".into(),
                                 FakeTtsMode::FixedVoice => crate::fixed_tts::FIXED_TTS_VOICE.into(),
+                                FakeTtsMode::LocalSayVoice => {
+                                    crate::fixed_tts::LOCAL_SAY_TTS_VOICE.into()
+                                }
                                 _ => voice.into(),
                             },
                             sample_rate: TTS_SAMPLE_RATE,
                             samples: samples as u64,
                             characters: Some(text.chars().count() as u64),
-                            transport: "fake",
+                            transport: match self.mode {
+                                FakeTtsMode::LocalSayVoice => "local-process",
+                                _ => "fake",
+                            },
                             attempts: 1,
                         },
                     ))
@@ -814,6 +830,25 @@ mod tests {
             .unwrap();
         assert!(matches!(outcome, SummaryRunOutcome::Published { .. }));
         assert_eq!(fixed_voice.calls.load(Ordering::SeqCst), 1);
+        let unread = store.current_unread_summary(TASK).unwrap().unwrap();
+        assert_eq!(unread.generation, 1);
+    }
+
+    #[test]
+    fn local_say_voice_publishes_without_releasing_the_claim() {
+        let temporary = tempfile::tempdir().unwrap();
+        let state_path = temporary.path().join("state.sqlite3");
+        let cache_path = temporary.path().join("cache");
+        let mut store = StateStore::open(&state_path).unwrap();
+        let cache = open_cache(&cache_path);
+        insert_completion(&mut store, FIRST, 1);
+        let generator = generator();
+        let local_voice = synthesizer(FakeTtsMode::LocalSayVoice);
+        let outcome = SummaryOrchestrator::new(&mut store, &cache, &generator, &local_voice)
+            .run(TASK, "request-1")
+            .unwrap();
+        assert!(matches!(outcome, SummaryRunOutcome::Published { .. }));
+        assert_eq!(local_voice.calls.load(Ordering::SeqCst), 1);
         let unread = store.current_unread_summary(TASK).unwrap().unwrap();
         assert_eq!(unread.generation, 1);
     }

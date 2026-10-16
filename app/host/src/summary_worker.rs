@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use crate::cache::CacheLimits;
 use crate::cache::CacheStore;
 use crate::dashscope::DashScopeTtsClient;
-use crate::fixed_tts::{FixedAudioSummarySynthesizer, FixedTtsLibrary};
+use crate::fixed_tts::{FixedTtsLibrary, LocalSaySummarySynthesizer};
 use crate::paths::AppPaths;
 #[cfg(not(test))]
 use crate::secrets::LocalCacheSecretStore;
@@ -49,7 +49,7 @@ pub fn run(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SummaryTtsMode {
     DashScope,
-    FixedAudio,
+    LocalSay,
 }
 
 struct Runtime {
@@ -58,6 +58,7 @@ struct Runtime {
     tts_client: DashScopeTtsClient,
     dashscope_env: DashScopeEnvStore,
     accounts: KeychainAccounts,
+    paths: AppPaths,
     tts_mode: SummaryTtsMode,
     fixed_tts: Option<FixedTtsLibrary>,
 }
@@ -75,9 +76,11 @@ impl Runtime {
             (SummaryTtsMode::DashScope, None)
         } else {
             let library = FixedTtsLibrary::open(paths).map_err(|error| {
-                format!("dashscope credential is missing and fixed TTS is unavailable: {error}")
+                format!(
+                    "DashScope credential is missing and local TTS fallback is unavailable: {error}"
+                )
             })?;
-            (SummaryTtsMode::FixedAudio, Some(library))
+            (SummaryTtsMode::LocalSay, Some(library))
         };
         eprintln!(
             "summary_tts_mode={:?} reason={}",
@@ -94,6 +97,7 @@ impl Runtime {
             tts_client: DashScopeTtsClient::default(),
             dashscope_env,
             accounts,
+            paths: paths.clone(),
             tts_mode,
             fixed_tts,
         })
@@ -154,11 +158,12 @@ fn run_ready(
                     secrets: &runtime.dashscope_env,
                     accounts: &runtime.accounts,
                 }),
-                SummaryTtsMode::FixedAudio => Box::new(FixedAudioSummarySynthesizer::new(
+                SummaryTtsMode::LocalSay => Box::new(LocalSaySummarySynthesizer::new(
+                    &runtime.paths,
                     runtime
                         .fixed_tts
                         .as_ref()
-                        .expect("fixed TTS library is loaded in fixed mode"),
+                        .expect("fixed TTS fallback is loaded in local say mode"),
                 )),
             };
             let request_id = format!("auto-{}", uuid::Uuid::new_v4());

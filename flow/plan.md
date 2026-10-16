@@ -95,6 +95,17 @@
 - [x] 补固定库加载、manifest provenance、voice 校验和 summary worker 无 key 路径测试；全量
       `eval-fast` 通过后更新总体方案与进展日志。
 
+### L2F 无 Key 动态本地语音播报
+
+- [x] 在不改变 ASR、DeepSeek 总结、EIAD/cache/generation/heard 协议的前提下，把无 DashScope key
+      的总结播报从固定提示音升级为 macOS `/usr/bin/say` 动态朗读完整 `spoken_text`。
+- [x] 正文只经私有临时文件管道传入 `say`，不进入 argv 或日志；输出校验为 48 kHz mono PCM16，
+      进程有有界超时，失败时回退既有 `fixed-local-v1` 固定提示音。
+- [x] 自动与手动 summary 路径、`tts-status` provenance 同步更新，并用 fake `say` 覆盖动态差异、
+      stdin/argv 边界、格式失败、进程失败、超时与固定回退。
+- [x] 完成真实 `say` 冒烟、release Host 升级和一次 S1 -> S5 真机 HIL，确认听到的内容随 DeepSeek
+      总结变化且播放完成后信箱灯熄灭，再提交推送。
+
 ## L4 新手完整跑通引导
 
 - [x] 修复新版 Codex catalog 对省略 `pinned-thread-ids` 的兼容：字段缺失表示没有置顶任务，最近任务 allow-list 继续可用，并补回归测试。

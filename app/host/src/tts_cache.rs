@@ -5,7 +5,7 @@ use zeroize::Zeroizing;
 use crate::audio::{AudioError, TTS_SAMPLE_RATE, decode_wav, encode_tts_audio, inspect_eiad};
 use crate::cache::{CacheBundle, CacheError, CacheId, CacheStore};
 use crate::dashscope::{LEGACY_TTS_MODEL, LEGACY_TTS_MODEL_SNAPSHOT, TTS_MODEL, TtsAudio};
-use crate::fixed_tts::FIXED_TTS_MODEL;
+use crate::fixed_tts::{FIXED_TTS_MODEL, LOCAL_SAY_TTS_MODEL};
 use crate::summary::{SummaryDocument, SummaryDocumentError};
 
 pub const TTS_CACHE_MANIFEST_SCHEMA: u8 = 1;
@@ -151,10 +151,10 @@ where
 }
 
 fn requested_model_for(served_model: &str) -> &'static str {
-    if served_model == FIXED_TTS_MODEL {
-        FIXED_TTS_MODEL
-    } else {
-        TTS_MODEL
+    match served_model {
+        FIXED_TTS_MODEL => FIXED_TTS_MODEL,
+        LOCAL_SAY_TTS_MODEL => LOCAL_SAY_TTS_MODEL,
+        _ => TTS_MODEL,
     }
 }
 
@@ -228,8 +228,10 @@ fn validate_cached_manifest(
         );
     let fixed_model =
         manifest.requested_model == FIXED_TTS_MODEL && manifest.served_model == FIXED_TTS_MODEL;
+    let local_say_model = manifest.requested_model == LOCAL_SAY_TTS_MODEL
+        && manifest.served_model == LOCAL_SAY_TTS_MODEL;
     if manifest.schema != TTS_CACHE_MANIFEST_SCHEMA
-        || !(current_model || legacy_model || fixed_model)
+        || !(current_model || legacy_model || fixed_model || local_say_model)
         || manifest.voice.is_empty()
         || manifest.response_format != "pcm"
         || manifest.sample_rate != TTS_SAMPLE_RATE
@@ -336,6 +338,22 @@ mod tests {
         )
     }
 
+    fn local_say_tts(pcm: Vec<u8>) -> TtsAudio {
+        let samples = (pcm.len() / 2) as u64;
+        TtsAudio::from_test(
+            pcm,
+            TtsReceipt {
+                model: crate::fixed_tts::LOCAL_SAY_TTS_MODEL,
+                voice: crate::fixed_tts::LOCAL_SAY_TTS_VOICE.into(),
+                sample_rate: TTS_SAMPLE_RATE,
+                samples,
+                characters: Some(48),
+                transport: "local-process",
+                attempts: 1,
+            },
+        )
+    }
+
     #[test]
     fn fixed_local_audio_publishes_and_loads_with_truthful_provenance() {
         let temporary = tempfile::tempdir().unwrap();
@@ -364,6 +382,39 @@ mod tests {
         );
         assert_eq!(manifest["served_model"], crate::fixed_tts::FIXED_TTS_MODEL);
         assert_eq!(manifest["voice"], crate::fixed_tts::FIXED_TTS_VOICE);
+    }
+
+    #[test]
+    fn local_say_audio_publishes_and_loads_with_truthful_provenance() {
+        let temporary = tempfile::tempdir().unwrap();
+        let cache = CacheStore::open_with_raw_key_for_test(
+            &temporary.path().join("tts"),
+            [31; 32],
+            CacheLimits::default(),
+        )
+        .unwrap();
+        let audio = local_say_tts(pcm(EIAD_FRAME_SAMPLES + 7));
+        let published =
+            publish_tts_generation(&cache, "task-local-say", 4, summary(), &audio).unwrap();
+        let loaded = load_tts_generation_with(&cache, "task-local-say", 4, |cached| {
+            Ok::<_, std::convert::Infallible>(cached)
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(loaded.publication, published);
+        let id = CacheId::from_reference(&published.cache_reference).unwrap();
+        let raw = cache.read(&id).unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_slice(raw.manifest_json.as_slice()).unwrap();
+        assert_eq!(
+            manifest["requested_model"],
+            crate::fixed_tts::LOCAL_SAY_TTS_MODEL
+        );
+        assert_eq!(
+            manifest["served_model"],
+            crate::fixed_tts::LOCAL_SAY_TTS_MODEL
+        );
+        assert_eq!(manifest["voice"], crate::fixed_tts::LOCAL_SAY_TTS_VOICE);
     }
 
     #[test]

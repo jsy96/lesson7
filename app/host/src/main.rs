@@ -11,8 +11,8 @@ use easy_codex_host::dashscope::DashScopeTtsClient;
 use easy_codex_host::dashscope::{ASR_MODEL, DashScopeAsrClient, DashScopeHandshake, TTS_MODEL};
 #[cfg(target_os = "macos")]
 use easy_codex_host::fixed_tts::{
-    FIXED_TTS_MODEL, FIXED_TTS_VOICE, FixedAudioSummarySynthesizer, FixedTtsLibrary,
-    fixed_tts_is_configured,
+    FIXED_TTS_MODEL, FIXED_TTS_VOICE, FixedTtsLibrary, LOCAL_SAY_TTS_MODEL, LOCAL_SAY_TTS_VOICE,
+    LocalSaySummarySynthesizer, fixed_tts_is_configured, local_say_is_configured,
 };
 use easy_codex_host::health::{HEALTH_SOCKET_NAME, HostDaemon, query_health};
 use easy_codex_host::lan_voice::{WhisperCppConfig, import_default_whisper_model};
@@ -312,6 +312,7 @@ fn print_tts_status() -> Result<(), Box<dyn std::error::Error>> {
     let env = DashScopeEnvStore::new(paths.dashscope_env.clone(), &accounts);
     let configured = dashscope_key_is_installed(&env, &accounts)?;
     let fixed_present = fixed_tts_is_configured(&paths);
+    let local_say_present = local_say_is_configured();
     println!(
         "status={}",
         if configured || fixed_present {
@@ -322,18 +323,14 @@ fn print_tts_status() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!(
         "provider={}",
-        if configured {
-            "dashscope"
-        } else {
-            "fixed-local"
-        }
+        if configured { "dashscope" } else { "local-say" }
     );
     println!(
         "model={}",
         if configured {
             TTS_MODEL
         } else {
-            FIXED_TTS_MODEL
+            LOCAL_SAY_TTS_MODEL
         }
     );
     println!(
@@ -341,11 +338,12 @@ fn print_tts_status() -> Result<(), Box<dyn std::error::Error>> {
         if configured {
             SUMMARY_TTS_VOICE
         } else {
-            FIXED_TTS_VOICE
+            LOCAL_SAY_TTS_VOICE
         }
     );
     println!("region={}", if configured { "cn-beijing" } else { "local" });
     println!("fixed_audio_present={fixed_present}");
+    println!("local_say_present={local_say_present}");
     Ok(())
 }
 
@@ -412,7 +410,9 @@ fn summarize_slot(slot: u8) -> Result<(), Box<dyn std::error::Error>> {
         None
     } else {
         Some(FixedTtsLibrary::open(&paths).map_err(|error| {
-            format!("DashScope API key is not configured and fixed TTS is unavailable: {error}")
+            format!(
+                "DashScope API key is not configured and local TTS fallback is unavailable: {error}"
+            )
         })?)
     };
     println!(
@@ -420,7 +420,7 @@ fn summarize_slot(slot: u8) -> Result<(), Box<dyn std::error::Error>> {
         if dashscope_ready {
             "dashscope"
         } else {
-            "fixed_audio"
+            "local_say"
         }
     );
     let spark = SparkRunner::new(SparkRunnerConfig::default());
@@ -431,7 +431,7 @@ fn summarize_slot(slot: u8) -> Result<(), Box<dyn std::error::Error>> {
             secrets: &dashscope_env,
             accounts: &accounts,
         }),
-        Some(library) => Box::new(FixedAudioSummarySynthesizer::new(library)),
+        Some(library) => Box::new(LocalSaySummarySynthesizer::new(&paths, library)),
     };
     let request_id = format!("manual-{}", uuid::Uuid::new_v4());
     let outcome = {

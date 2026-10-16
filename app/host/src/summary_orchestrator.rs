@@ -240,6 +240,10 @@ where
             self.abandon(&claim)?;
             return Err(error.into());
         }
+        if let Err(error) = summary.validate_generated_spoken_text() {
+            self.abandon(&claim)?;
+            return Err(error.into());
+        }
         observer.reached(SummaryCheckpoint::SparkGenerated);
 
         if self.store.begin_summary_tts_attempt(&claim)? != SummaryTtsAttemptState::Started {
@@ -448,22 +452,38 @@ mod tests {
             {
                 decisions.push("use-transactional-publication".into());
             }
-            let current_spoken = format!(
-                "第 {} 代信箱更新。事实：{}。待办：{}。决策：{}。",
-                claim.generation,
-                facts.join("；"),
-                pending.join("；"),
-                decisions.join("；")
-            );
+            let current_spoken = format!("第 {} 代信箱更新，包含新结果和待办。", claim.generation);
             Ok(SummaryDocument {
                 schema: SUMMARY_SCHEMA_VERSION,
                 facts,
                 pending,
                 decisions,
-                spoken_text: previous_unheard.map_or(current_spoken.clone(), |document| {
-                    format!("{} {}", document.spoken_text, current_spoken)
-                }),
+                spoken_text: current_spoken,
                 source_evidence: Vec::new(),
+                covers_new_completions: claim
+                    .completions
+                    .iter()
+                    .map(|completion| completion.completion_id.clone())
+                    .collect(),
+            })
+        }
+    }
+
+    struct OverlongGenerator;
+
+    impl SummaryGenerator for OverlongGenerator {
+        fn generate(
+            &self,
+            claim: &SummaryClaim,
+            _previous_unheard: Option<&SummaryDocument>,
+        ) -> Result<SummaryDocument, SparkError> {
+            Ok(SummaryDocument {
+                schema: SUMMARY_SCHEMA_VERSION,
+                facts: vec![],
+                pending: vec![],
+                decisions: vec![],
+                spoken_text: "字".repeat(crate::summary::MAX_SPOKEN_TEXT_UNITS + 1),
+                source_evidence: vec![],
                 covers_new_completions: claim
                     .completions
                     .iter()
@@ -851,6 +871,36 @@ mod tests {
         assert_eq!(local_voice.calls.load(Ordering::SeqCst), 1);
         let unread = store.current_unread_summary(TASK).unwrap().unwrap();
         assert_eq!(unread.generation, 1);
+    }
+
+    #[test]
+    fn overlong_generated_spoken_text_fails_closed_before_tts() {
+        let temporary = tempfile::tempdir().unwrap();
+        let state_path = temporary.path().join("state.sqlite3");
+        let cache_path = temporary.path().join("cache");
+        let mut store = StateStore::open(&state_path).unwrap();
+        let cache = open_cache(&cache_path);
+        insert_completion(&mut store, FIRST, 1);
+        let tts = synthesizer(FakeTtsMode::Success);
+
+        let error = SummaryOrchestrator::new(&mut store, &cache, &OverlongGenerator, &tts)
+            .run(TASK, "request-1")
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            SummaryOrchestratorError::Summary(SummaryDocumentError::Text)
+        ));
+        assert_eq!(tts.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(store.current_unread_summary(TASK).unwrap(), None);
+        assert_eq!(store.pending_summary_completion_count(TASK).unwrap(), 1);
+        assert!(matches!(
+            store.claim_summary(TASK, "request-2").unwrap(),
+            Some(SummaryClaimResult::Claimed(SummaryClaim {
+                generation: 2,
+                ..
+            }))
+        ));
     }
 
     #[test]

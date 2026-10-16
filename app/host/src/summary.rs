@@ -9,6 +9,7 @@ pub const MAX_SUMMARY_DOCUMENT_BYTES: usize = 64 * 1024;
 pub const MAX_SUMMARY_ITEMS_PER_SECTION: usize = 32;
 pub const MAX_SUMMARY_ITEM_BYTES: usize = 1024;
 pub const MAX_SPOKEN_TEXT_BYTES: usize = 24 * 1024;
+pub const MAX_SPOKEN_TEXT_UNITS: usize = 120;
 pub const MAX_COVERS_NEW_COMPLETIONS: usize = 32;
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
@@ -120,6 +121,19 @@ impl SummaryDocument {
         }
         Ok(())
     }
+
+    pub(crate) fn validate_generated_spoken_text(&self) -> Result<(), SummaryDocumentError> {
+        if self
+            .spoken_text
+            .chars()
+            .filter(|character| character.is_alphanumeric())
+            .count()
+            > MAX_SPOKEN_TEXT_UNITS
+        {
+            return Err(SummaryDocumentError::Text);
+        }
+        Ok(())
+    }
 }
 
 fn validate_items(items: &[String]) -> Result<(), SummaryDocumentError> {
@@ -200,5 +214,29 @@ mod tests {
             SummaryDocument::parse(&vec![b'x'; MAX_SUMMARY_DOCUMENT_BYTES + 1]),
             Err(SummaryDocumentError::Size)
         );
+    }
+
+    #[test]
+    fn generated_spoken_text_has_a_hard_readable_unit_limit() {
+        let mut document = document();
+        document.spoken_text = "字".repeat(MAX_SPOKEN_TEXT_UNITS);
+        assert_eq!(document.validate_generated_spoken_text(), Ok(()));
+
+        document.spoken_text = "字".repeat(MAX_SPOKEN_TEXT_UNITS + 1);
+        assert_eq!(
+            document.validate_generated_spoken_text(),
+            Err(SummaryDocumentError::Text)
+        );
+
+        // Punctuation and whitespace add pauses but are not readable units.
+        document.spoken_text = format!(
+            "{}， {}。",
+            "字".repeat(MAX_SPOKEN_TEXT_UNITS),
+            "！".repeat(MAX_SPOKEN_TEXT_UNITS)
+        );
+        assert_eq!(document.validate_generated_spoken_text(), Ok(()));
+
+        // Legacy cached documents can still be parsed and used as previous-unread input.
+        assert!(SummaryDocument::parse(&document.canonical_json().unwrap()).is_ok());
     }
 }

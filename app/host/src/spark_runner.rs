@@ -416,9 +416,15 @@ impl SparkRunner {
         let bytes = read_bounded_output(&run.output, output_monitor.identity)?;
         let mut document = SummaryDocument::parse(&bytes).map_err(|_| SparkError::InvalidOutput)?;
         document
+            .validate_generated_spoken_text()
+            .map_err(|_| SparkError::InvalidOutput)?;
+        document
             .validate_expected_covers(&expected_covers)
             .map_err(|_| SparkError::InvalidOutput)?;
         redact_document(&mut document);
+        document
+            .validate_generated_spoken_text()
+            .map_err(|_| SparkError::InvalidOutput)?;
         document
             .validate_expected_covers(&expected_covers)
             .map_err(|_| SparkError::InvalidOutput)?;
@@ -622,7 +628,7 @@ fn build_prompt(
     claim: &SummaryClaim,
     previous_unheard: Option<&SummaryDocument>,
 ) -> Result<Zeroizing<Vec<u8>>, SparkError> {
-    const INSTRUCTIONS: &[u8] = b"Create a concrete cumulative unread task summary from the JSON input below. Each new completion contains only the authoritative final assistant reply from one completed task turn. Summarize only what those assistant_final fields reported: the user-visible result, still-relevant next work, and explicit decisions. Do not invent or reconstruct user messages, tool calls, intermediate progress, tests, logs, hidden reasoning, or implementation details that are not useful to the user. When previous_unheard is present, use it as cumulative context, then naturally re-summarize the still-relevant old unread content together with every new completion. Do not copy previous spoken_text verbatim and do not narrate a chronological history. Write spoken_text as a natural Simplified Chinese briefing of at most 480 letters, digits, or Han characters. Match its length to the actual information: keep a trivial confirmation to one short sentence; for an ordinary result, retain only the most important conclusion, core numbers, limitations, decisions, and any action the user truly needs; use more length for cumulative unread material only when needed to preserve useful meaning. Never pad toward a target length or paraphrase the whole source. Lead immediately with the newest concrete user-visible result, prioritizing the last new completion, then briefly fold in other material unread outcomes or decisions. End with a next action only when the source contains a real actionable next step; never add a generic closing such as saying work can continue. It must be self-contained and say what was actually completed, what result matters, and any relevant next step or decision; do not merely say that a task is done. Omit test commands, validation mechanics, and implementation detail unless the user must act on them. The TTS reads spoken_text exactly, so never include schema labels, validation notes, section headings, or boilerplate that a person should not hear. Return only the output-schema JSON. covers_new_completions must exactly equal the ordered completion_id values in new_completions. Never emit credentials, hidden reasoning, or local absolute paths.\n";
+    const INSTRUCTIONS: &[u8] = b"Create a concrete cumulative unread task summary from the JSON input below. Each new completion contains only the authoritative final assistant reply from one completed task turn. Summarize only what those assistant_final fields reported: the user-visible result, still-relevant next work, and explicit decisions. Do not invent or reconstruct user messages, tool calls, intermediate progress, tests, logs, hidden reasoning, or implementation details that are not useful to the user. When previous_unheard is present, use it as cumulative context, then naturally re-summarize the still-relevant old unread content together with every new completion. Do not copy previous spoken_text verbatim and do not narrate a chronological history. Write spoken_text as a natural Simplified Chinese briefing targeting at most 100 letters, digits, or Han characters, and never exceed 120 such readable characters; this must stay under about 30 seconds when spoken. Keep a trivial confirmation to one short sentence and an ordinary result to at most two sentences. For cumulative unread material, prioritize the newest concrete result and at most one still-required action or important unresolved limitation; compress or omit older detail rather than narrating every item. Never pad toward a target length or paraphrase the whole source. Lead immediately with the newest concrete user-visible result, prioritizing the last new completion, then briefly fold in other material unread outcomes or decisions. End with a next action only when the source contains a real actionable next step; never add a generic closing such as saying work can continue. It must be self-contained and say what was actually completed, what result matters, and any relevant next step or decision; do not merely say that a task is done. Omit test commands, validation mechanics, and implementation detail unless the user must act on them. The TTS reads spoken_text exactly, so never include schema labels, validation notes, section headings, or boilerplate that a person should not hear. Return only the output-schema JSON. covers_new_completions must exactly equal the ordered completion_id values in new_completions. Never emit credentials, hidden reasoning, or local absolute paths.\n";
     let completions = assistant_completions(claim)?;
     let mut prompt = BoundedSensitiveWriter::new(MAX_PROMPT_BYTES);
     prompt
@@ -2485,6 +2491,12 @@ mod tests {
         let prompt = build_prompt(&claim(), None).unwrap();
         let prompt = std::str::from_utf8(prompt.as_slice()).unwrap();
         assert!(prompt.contains("natural Simplified Chinese"));
+        assert!(prompt.contains("targeting at most 100 letters, digits, or Han characters"));
+        assert!(prompt.contains("never exceed 120 such readable characters"));
+        assert!(prompt.contains("at most two sentences"));
+        assert!(prompt.contains("prioritize the newest concrete result"));
+        assert!(prompt.contains("compress or omit older detail"));
+        assert!(!prompt.contains("at most 480 letters"));
         assert!(prompt.contains("use it as cumulative context"));
         assert!(prompt.contains("Do not copy previous spoken_text verbatim"));
         assert!(prompt.contains("authoritative final assistant reply"));
@@ -2496,12 +2508,30 @@ mod tests {
         assert!(prompt.contains("prioritizing the last new completion"));
         assert!(prompt.contains("do not narrate a chronological history"));
         assert!(prompt.contains("End with a next action only when"));
-        assert!(prompt.contains("Match its length to the actual information"));
-        assert!(prompt.contains("keep a trivial confirmation to one short sentence"));
+        assert!(prompt.contains("Keep a trivial confirmation to one short sentence"));
         assert!(prompt.contains("Never pad toward a target length"));
         assert!(!prompt.contains("120 to 180"));
         assert!(!prompt.contains("discard-me-user"));
         assert!(!prompt.contains("discard-me-tool"));
+    }
+
+    #[test]
+    fn legacy_long_previous_unheard_remains_valid_input_for_compression() {
+        let mut previous = previous_document();
+        previous.spoken_text = "旧".repeat(crate::summary::MAX_SPOKEN_TEXT_UNITS + 1);
+        assert!(previous.validate().is_ok());
+        assert!(previous.validate_generated_spoken_text().is_err());
+        let mut cumulative_claim = claim();
+        cumulative_claim.previous_unread = Some(crate::store::UnreadSummary {
+            task_id: TASK.into(),
+            generation: 1,
+            cache_object: "cache/previous".into(),
+            coverage_count: 1,
+        });
+        assert_eq!(
+            validate_claim_input(&cumulative_claim, Some(&previous)),
+            Ok(())
+        );
     }
 
     #[test]

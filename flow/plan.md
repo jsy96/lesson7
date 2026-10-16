@@ -96,7 +96,7 @@
 
 - [x] 修复新版 Codex catalog 对省略 `pinned-thread-ids` 的兼容：字段缺失表示没有置顶任务，最近任务 allow-list 继续可用，并补回归测试。
 - [x] 安装并启动本地 Mac Host，验证 health、无 Key 本地 ASR 和固定 TTS 状态。
-- [ ] 构建、安装并打开 `Codex Keyboard.app`，确认任务列表和四槽绑定可用。
+- [x] 构建、安装并打开 `Codex Keyboard.app`，确认任务列表和四槽绑定可用。
 - [ ] 连接 EasyInput V2，先做设备识别与日志核验；如需烧录，必须重新构建并按三镜像 SHA 授权 SOP 执行。
 - [ ] 完成同 Wi-Fi 下 S1 语音输入 -> Codex 执行 -> S5 播放完成提示的端到端 HIL，再逐步覆盖四槽。
 

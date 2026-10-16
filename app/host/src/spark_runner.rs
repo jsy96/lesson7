@@ -34,8 +34,11 @@ use crate::rollout_observer::{TurnPack, redact_sensitive_text};
 use crate::store::{MAX_SUMMARY_COMPLETIONS_PER_CLAIM, PendingSummaryCompletion, SummaryClaim};
 use crate::summary::{MAX_SUMMARY_DOCUMENT_BYTES, SummaryDocument};
 
-pub const SPARK_MODEL: &str = "gpt-5.6-luna";
+pub const SPARK_MODEL: &str = "deepseek-flash";
+pub const SPARK_PROVIDER: &str = "deepseek";
+pub const SPARK_BASE_URL: &str = "https://api.deepseek.com";
 pub const SPARK_REASONING_EFFORT: &str = "high";
+const DEEPSEEK_MODEL_CATALOG_JSON: &str = include_str!("deepseek_models.json");
 const DISABLED_SPARK_FEATURES: &[&str] = &[
     "plugins",
     "remote_plugin",
@@ -75,6 +78,7 @@ const MAX_CHILD_FILE_BYTES: libc::rlim_t = 16 * 1024 * 1024;
 pub const SPARK_MAX_WORKSPACE_BYTES: u64 = 8 * 1024 * 1024;
 pub const SPARK_MAX_WORKSPACE_NODES: usize = 32;
 const MAX_RUNTIME_DATABASE_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_MODEL_CATALOG_BYTES: u64 = 64 * 1024;
 const MAX_RUNTIME_WAL_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_RUNTIME_SHM_BYTES: u64 = 256 * 1024;
 const MAX_MODEL_CACHE_BYTES: u64 = 2 * 1024 * 1024;
@@ -174,14 +178,12 @@ impl Default for SparkRunnerConfig {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/nonexistent"));
-        let codex_home = std::env::var_os("CODEX_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join(".codex"));
+        let app_paths = AppPaths::from_home(&home);
         Self {
             executable: discover_codex_executable(),
             supervisor_executable: std::env::current_exe().ok(),
-            auth_path: codex_home.join("auth.json"),
-            temp_root: AppPaths::from_home(&home).runtime_directory.join("spark"),
+            auth_path: app_paths.spark_auth,
+            temp_root: app_paths.runtime_directory.join("spark"),
             timeout: Duration::from_secs(5 * 60),
             max_stdout_bytes: MAX_STDOUT_BYTES,
             max_stderr_bytes: MAX_STDERR_BYTES,
@@ -254,6 +256,7 @@ impl SparkRunner {
         let workspace_monitor = SparkWorkspaceMonitor::new(
             &run.codex_home,
             &run.auth_file,
+            &run.model_catalog_file,
             &run.sandbox_marker_file,
             &run.skills_dir,
             &run.home_tmpdir,
@@ -730,6 +733,7 @@ struct SparkRunFiles {
     owner_lock: ExplicitFileLock,
     task_lock: ExplicitFileLock,
     auth_file: File,
+    model_catalog_file: File,
     sandbox_marker_file: File,
     output_file: File,
     owner_guardian: PathBuf,
@@ -816,6 +820,11 @@ impl SparkRunFiles {
                 .map_err(|_| SparkError::UnsafeWorkspace)?;
         }
         let auth_file = write_new_file(&codex_home.join("auth.json"), auth, 0o400)?;
+        let model_catalog_file = write_new_file(
+            &codex_home.join("models.json"),
+            DEEPSEEK_MODEL_CATALOG_JSON.as_bytes(),
+            0o400,
+        )?;
         let sandbox_marker_file =
             write_new_file(&codex_home.join(".sandbox_migration"), b"v1\n", 0o400)?;
         let skills_dir = codex_home.join("skills");
@@ -846,6 +855,7 @@ impl SparkRunFiles {
             owner_lock,
             task_lock,
             auth_file,
+            model_catalog_file,
             sandbox_marker_file,
             output_file,
             owner_guardian,
@@ -1288,6 +1298,7 @@ struct SparkWorkspaceMonitor {
     root: PathBuf,
     root_identity: FileIdentity,
     auth_identity: Option<FileIdentity>,
+    model_catalog_identity: Option<FileIdentity>,
     sandbox_marker_identity: FileIdentity,
     skills_identity: FileIdentity,
     tmp_identity: FileIdentity,
@@ -1304,6 +1315,7 @@ impl SparkWorkspaceMonitor {
     fn new(
         root: &Path,
         auth: &File,
+        model_catalog: &File,
         sandbox_marker: &File,
         skills: &Path,
         tmp: &Path,
@@ -1318,6 +1330,8 @@ impl SparkWorkspaceMonitor {
         let process_tmp_identity = private_directory_identity(process_tmp, 0o700)?;
         let auth_identity =
             Some(FileIdentity::from_file(auth).map_err(|_| SparkError::UnsafeWorkspace)?);
+        let model_catalog_identity =
+            Some(FileIdentity::from_file(model_catalog).map_err(|_| SparkError::UnsafeWorkspace)?);
         let sandbox_marker_identity =
             FileIdentity::from_file(sandbox_marker).map_err(|_| SparkError::UnsafeWorkspace)?;
         let alias_target = trusted_executable_path(executable)?;
@@ -1325,6 +1339,7 @@ impl SparkWorkspaceMonitor {
             root: root.to_path_buf(),
             root_identity,
             auth_identity,
+            model_catalog_identity,
             sandbox_marker_identity,
             skills_identity,
             tmp_identity,
@@ -1360,6 +1375,7 @@ impl SparkWorkspaceMonitor {
             root: root.to_path_buf(),
             root_identity,
             auth_identity: None,
+            model_catalog_identity: None,
             sandbox_marker_identity,
             skills_identity,
             tmp_identity,
@@ -1406,6 +1422,7 @@ impl SparkWorkspaceMonitor {
             let metadata =
                 fs::symlink_metadata(entry.path()).map_err(|_| SparkError::UnsafeWorkspace)?;
             let is_auth = name == "auth.json" && self.auth_identity.is_some();
+            let is_model_catalog = name == "models.json" && self.model_catalog_identity.is_some();
             nodes = nodes.checked_add(1).ok_or(SparkError::UnsafeWorkspace)?;
             if nodes > SPARK_MAX_WORKSPACE_NODES {
                 return Err(SparkError::UnsafeWorkspace);
@@ -1419,6 +1436,9 @@ impl SparkWorkspaceMonitor {
             }
             if is_auth && !metadata.file_type().is_file() {
                 return Err(SparkError::Authentication);
+            }
+            if is_model_catalog && !metadata.file_type().is_file() {
+                return Err(SparkError::UnsafeWorkspace);
             }
 
             if metadata.file_type().is_dir() {
@@ -1503,6 +1523,16 @@ impl SparkWorkspaceMonitor {
                     return Err(SparkError::UnsafeWorkspace);
                 }
                 3
+            } else if name == "models.json" {
+                if !self
+                    .model_catalog_identity
+                    .is_some_and(|identity| identity.matches(&metadata))
+                    || mode != 0o400
+                    || metadata.len() != DEEPSEEK_MODEL_CATALOG_JSON.len() as u64
+                {
+                    return Err(SparkError::UnsafeWorkspace);
+                }
+                MAX_MODEL_CATALOG_BYTES
             } else {
                 if mode & 0o133 != 0 {
                     return Err(SparkError::UnsafeWorkspace);
@@ -1773,11 +1803,23 @@ fn spark_command(
         "--skip-git-repo-check",
         "--config",
         "approval_policy=\"never\"",
-        "--config",
-        "model_reasoning_effort=\"high\"",
         "--output-schema",
     ]);
     command.arg(schema);
+    for configuration in [
+        format!("model_reasoning_effort=\"{}\"", SPARK_REASONING_EFFORT),
+        format!("model_provider=\"{}\"", SPARK_PROVIDER),
+        format!("model_catalog_json={:?}", codex_home.join("models.json")),
+        format!("model_providers.{SPARK_PROVIDER}.name=\"DeepSeek\""),
+        format!(
+            "model_providers.{SPARK_PROVIDER}.base_url=\"{}\"",
+            SPARK_BASE_URL
+        ),
+        format!("model_providers.{SPARK_PROVIDER}.wire_api=\"responses\""),
+        format!("model_providers.{SPARK_PROVIDER}.requires_openai_auth=true"),
+    ] {
+        command.args(["--config", configuration.as_str()]);
+    }
     for feature in DISABLED_SPARK_FEATURES {
         command.args(["--disable", feature]);
     }
@@ -2518,6 +2560,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 test -r "$CODEX_HOME/auth.json"
+test -r "$CODEX_HOME/models.json"
 test ! -e "$CODEX_HOME/config.toml"
 test ! -w "$CODEX_HOME/skills"
 test ! -n "$(find "$CODEX_HOME/skills" -mindepth 1 -print -quit)"
@@ -2535,6 +2578,23 @@ printf '%s' '{{"schema":1,"facts":["done"],"pending":[],"decisions":[],"spoken_t
                 completion = COMPLETION,
             ),
         )
+    }
+
+    #[test]
+    fn deepseek_model_catalog_is_bounded_and_supports_high_reasoning() {
+        let catalog: serde_json::Value = serde_json::from_str(DEEPSEEK_MODEL_CATALOG_JSON).unwrap();
+        let model = &catalog["models"][0];
+
+        assert_eq!(model["slug"], SPARK_MODEL);
+        assert_eq!(model["default_reasoning_level"], SPARK_REASONING_EFFORT);
+        assert!(
+            model["supported_reasoning_levels"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|level| level["effort"] == SPARK_REASONING_EFFORT)
+        );
+        assert!(DEEPSEEK_MODEL_CATALOG_JSON.len() as u64 <= MAX_MODEL_CATALOG_BYTES);
     }
 
     #[test]
@@ -2569,19 +2629,24 @@ printf '%s' '{{"schema":1,"facts":["done"],"pending":[],"decisions":[],"spoken_t
         assert!(!prompt.contains("summary-request"));
         let arguments = fs::read_to_string(args).unwrap();
         for required in [
-            "exec",
-            "--model",
-            SPARK_MODEL,
-            "--sandbox",
-            "read-only",
-            "--ephemeral",
-            "--ignore-user-config",
-            "--ignore-rules",
-            "approval_policy=\"never\"",
-            "model_reasoning_effort=\"high\"",
-            "--output-schema",
-            "--output-last-message",
-            "-",
+            String::from("exec"),
+            String::from("--model"),
+            SPARK_MODEL.to_string(),
+            String::from("--sandbox"),
+            String::from("read-only"),
+            String::from("--ephemeral"),
+            String::from("--ignore-user-config"),
+            String::from("--ignore-rules"),
+            String::from("approval_policy=\"never\""),
+            format!("model_reasoning_effort=\"{}\"", SPARK_REASONING_EFFORT),
+            format!("model_provider=\"{}\"", SPARK_PROVIDER),
+            String::from("model_providers.deepseek.name=\"DeepSeek\""),
+            String::from("model_providers.deepseek.base_url=\"https://api.deepseek.com\""),
+            String::from("model_providers.deepseek.wire_api=\"responses\""),
+            String::from("model_providers.deepseek.requires_openai_auth=true"),
+            String::from("--output-schema"),
+            String::from("--output-last-message"),
+            String::from("-"),
         ] {
             assert!(arguments.lines().any(|line| line == required));
         }
@@ -2954,6 +3019,7 @@ printf '%s' '{{"schema":1,"facts":["done"],"pending":[],"decisions":[],"spoken_t
         let monitor = SparkWorkspaceMonitor::new(
             &run.codex_home,
             &run.auth_file,
+            &run.model_catalog_file,
             &run.sandbox_marker_file,
             &run.skills_dir,
             &run.home_tmpdir,

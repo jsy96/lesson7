@@ -12,9 +12,10 @@
   短按旋钮立即播放固件内预置的当前音量播报，长按 3 秒仍进入配置模式。
 - 固件不保存 Codex task UUID；`slot -> task` 的唯一真相源是 Mac Host SQLite。
 - Tauri App 是本地 Host 的管理界面，不拥有第二份状态。
-- 总结固定由 Host 隔离调用 `gpt-5.6-luna`，reasoning effort 为 `high`；TTS 固定调用北京区
+- 总结固定由 Host 隔离调用 DeepSeek `deepseek-flash`，OpenAI 兼容 base URL 为
+  `https://api.deepseek.com`，reasoning effort 为 `high`；TTS 固定调用北京区
   `qwen-audio-3.0-tts-flash`，音色 `longanfengyue`，完整 `spoken_text` 每代只提交一次；ASR
-  默认 `qwen3-asr-flash`。
+  默认 `qwen3-asr-flash`，无 DashScope key 时可走本地 whisper.cpp 降级。
 - 左起第 1-4 颗灯只表示槽 1-4 的未听信箱；最右第 5 颗灯只表示不同已绑定任务的运行数，
   0/1/2/3/4 个依次为绿/黄/橙/紫/红，全部完成后回绿。
 
@@ -32,6 +33,8 @@
 ## Secret 边界
 
 - DashScope key：`~/Library/Application Support/EasyCodexInput/.env`，mode `0600`。
+- DeepSeek key：`~/Library/Application Support/EasyCodexInput/deepseek-auth.json`，mode `0600`；
+  Spark 只在临时隔离 `CODEX_HOME` 内复制为 mode `0400` auth，不读写全局 `~/.codex/config.toml`。
 - cache/device secret：同一 App Support 根下的 mode `0600` 私有文件。
 - 不把 key、真实 task UUID、prompt、transcript、录音或家庭 Wi-Fi 凭据写入仓库、日志或证据。
 

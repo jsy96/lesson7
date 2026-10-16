@@ -35,6 +35,9 @@
 - [x] 优化 Spark 播报文本：最新结果放在最前，压缩仍相关的旧未听内容，只在确有行动时以下一步收尾；只改 prompt，不新增正文硬编码。
 - [x] 首版 Qwen TTS 听感优化：Cherry 通用女声采用自然同事式、中等偏快、短停顿，减少播音腔/客服腔；后续模型替换见下项。
 - [x] 将总结模型切换为 `gpt-5.6-luna` + `high`，并按实际信息量自适应摘要长度，短结果不再为了字数扩写。
+- [x] 按用户确认将当前总结模型切换为 DeepSeek `deepseek-flash` + `high`，base URL 为
+      `https://api.deepseek.com`；provider/model catalog 只注入 Host 隔离运行，DeepSeek key 使用
+      App Support 私有 auth 文件，并完成真实 key 冒烟与 S1 -> S5 HIL。
 - [x] 将总结播报切换为北京区 `qwen-audio-3.0-tts-flash` + `longanfengyue`，完整 `spoken_text` 只提交一次并缓存一段完整 WAV，不再分句生成后拼接。
 - [x] 完成 Host 自动化、一次真实 48 kHz TTS 冒烟和 live Host 升级，再提交推送本阶段。
 - [x] 将最右第 5 颗灯改为整机任务活动灯：0 个已绑定任务运行时绿色常亮，1/2/3/4 个运行任务分别显示黄/橙/紫/红；全部完成后回到绿色。左起四颗继续只表示四槽未听信箱，短时输入反馈仍可覆盖后恢复。
@@ -98,7 +101,7 @@
 - [x] 安装并启动本地 Mac Host，验证 health、无 Key 本地 ASR 和固定 TTS 状态。
 - [x] 构建、安装并打开 `Codex Keyboard.app`，确认任务列表和四槽绑定可用。
 - [x] 连接 EasyInput V2，先做设备识别与日志核验；如需烧录，必须重新构建并按三镜像 SHA 授权 SOP 执行。
-- [ ] 完成同 Wi-Fi 下 S1 语音输入 -> Codex 执行 -> S5 播放完成提示的端到端 HIL，再逐步覆盖四槽。
+- [x] 完成同 Wi-Fi 下 S1 语音输入 -> 本地 Whisper ASR -> Codex 执行 -> DeepSeek 总结 -> S5 播放固定完成语音的端到端 HIL；用户确认播放后 S1 信箱灯熄灭。
 
 ## 阶段合同
 

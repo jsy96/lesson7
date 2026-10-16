@@ -53,7 +53,6 @@ pub(crate) fn discover_codex_executable() -> PathBuf {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
         return PathBuf::from("codex");
     };
-    let node_versions = home.join(".nvm/versions/node");
     let package = if cfg!(target_arch = "aarch64") {
         "codex-darwin-arm64"
     } else {
@@ -64,6 +63,14 @@ pub(crate) fn discover_codex_executable() -> PathBuf {
     } else {
         "x86_64-apple-darwin"
     };
+    let app_support = home
+        .join("Library")
+        .join("Application Support")
+        .join("EasyCodexInput");
+    if let Some(candidate) = verified_codex_candidate(&app_support, vendor) {
+        return candidate;
+    }
+    let node_versions = home.join(".nvm/versions/node");
     let Ok(entries) = std::fs::read_dir(node_versions) else {
         return PathBuf::from("codex");
     };
@@ -83,6 +90,25 @@ pub(crate) fn discover_codex_executable() -> PathBuf {
         .collect::<Vec<_>>();
     candidates.sort();
     candidates.pop().unwrap_or_else(|| PathBuf::from("codex"))
+}
+
+fn verified_codex_candidate(app_support: &Path, vendor: &str) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(app_support).ok()?;
+    let mut roots = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("codex-cli-") && name.ends_with("-verified"))
+        })
+        .collect::<Vec<_>>();
+    roots.sort();
+    roots
+        .into_iter()
+        .rev()
+        .map(|root| root.join("vendor").join(vendor).join("bin/codex"))
+        .find(|path| path.is_file())
 }
 
 #[derive(Debug, Clone)]
@@ -123,7 +149,14 @@ impl CodexRunner {
             command
         } else {
             let mut command = Command::new(&self.config.executable);
-            command.args(["exec", "resume", "--json", job.task_id.as_str(), "-"]);
+            command.args([
+                "exec",
+                "resume",
+                "--skip-git-repo-check",
+                "--json",
+                job.task_id.as_str(),
+                "-",
+            ]);
             command
         };
         command
@@ -327,7 +360,14 @@ pub fn run_supervisor(
         return Err(std::io::Error::last_os_error());
     }
     let mut child = match Command::new(executable)
-        .args(["exec", "resume", "--json", task_id, "-"])
+        .args([
+            "exec",
+            "resume",
+            "--skip-git-repo-check",
+            "--json",
+            task_id,
+            "-",
+        ])
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -543,6 +583,28 @@ impl Drop for ChildGuard {
 
 #[cfg(test)]
 mod tests {
+    use super::verified_codex_candidate;
+
+    #[test]
+    fn verified_app_support_codex_is_preferred_newest_version() {
+        let root = tempfile::tempdir().unwrap();
+        let old = root
+            .path()
+            .join("codex-cli-0.144.0-verified/vendor/aarch64-apple-darwin/bin/codex");
+        let current = root
+            .path()
+            .join("codex-cli-0.145.0-verified/vendor/aarch64-apple-darwin/bin/codex");
+        for candidate in [&old, &current] {
+            std::fs::create_dir_all(candidate.parent().unwrap()).unwrap();
+            std::fs::write(candidate, b"fixture").unwrap();
+        }
+
+        assert_eq!(
+            verified_codex_candidate(root.path(), "aarch64-apple-darwin"),
+            Some(current)
+        );
+    }
+
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
 
@@ -599,7 +661,7 @@ mod tests {
         assert_eq!(runner.run(&fixture_job(temp.path(), prompt)), Ok(()));
         assert_eq!(
             fs::read_to_string(args).unwrap(),
-            "exec\nresume\n--json\n00000000-0000-4000-8000-000000000001\n-\n"
+            "exec\nresume\n--skip-git-repo-check\n--json\n00000000-0000-4000-8000-000000000001\n-\n"
         );
         assert_eq!(fs::read_to_string(stdin).unwrap(), prompt);
         assert!(!temp.path().join("should-not-exist").exists());

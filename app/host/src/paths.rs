@@ -48,6 +48,7 @@ impl Drop for ExplicitFileLock {
 pub struct AppPaths {
     pub root: PathBuf,
     pub dashscope_env: PathBuf,
+    pub spark_auth: PathBuf,
     pub state_database: PathBuf,
     pub installation_id: PathBuf,
     pub device_secret: PathBuf,
@@ -68,6 +69,7 @@ impl AppPaths {
     pub fn from_root(root: PathBuf) -> Self {
         Self {
             dashscope_env: root.join(".env"),
+            spark_auth: root.join("deepseek-auth.json"),
             state_database: root.join("state.sqlite3"),
             installation_id: root.join("installation-id"),
             device_secret: root.join("device-secret.hex"),

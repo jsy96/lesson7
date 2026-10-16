@@ -121,7 +121,7 @@ fn macos_supervisor_kills_codex_group_after_host_sigkill() {
     wait_for_file(&descendant_file, &mut parent);
     assert_eq!(
         fs::read_to_string(&args_file).unwrap(),
-        "exec\nresume\n--json\n00000000-0000-4000-8000-000000000001\n-\n"
+        "exec\nresume\n--skip-git-repo-check\n--json\n00000000-0000-4000-8000-000000000001\n-\n"
     );
     assert_eq!(fs::read_to_string(&prompt_file).unwrap(), "start");
     assert!(!leaked_socket.exists(), "control socket leaked into Codex");
